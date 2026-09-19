@@ -13,9 +13,10 @@ You do NOT talk to the caller and you do NOT make decisions. You read the caller
 
 Extraction rules:
 - identity: only values the caller states in THIS message (not earlier turns). Normalize dob to YYYY-MM-DD.
-  id_last4 = last 4 digits of SSN or national ID. Keep phone/email exactly as given. If the caller is a
-  representative (calling for someone else), identity fields describe the POLICYHOLDER, and put the
-  caller's own name in representative_name.
+  id_last4 = last 4 digits of SSN. Full name, DOB, and id_last4 are the required
+  verification fields. Policy number, phone, and email may be extracted as context if stated, but they do
+  not satisfy verification. If the caller is a representative (calling for someone else), identity fields
+  describe the POLICYHOLDER, and put the caller's own name in representative_name.
 - intent: the caller's underlying need, one of {', '.join(INTENTS)}, or "none". Interpret messy language
   ("why didn't they pay", "what's going on with my claim", "what do I send you").
 - case_hints: anything that helps pick WHICH claim: type (healthcare/medical->healthcare, car->auto),
@@ -27,10 +28,12 @@ Extraction rules:
   "refuse_info" = declining to give an identity field (list them in declined_fields).
   "done" = no more questions / wrapping up. "affirm"/"deny" = yes/no answers to the agent's last question.
   "request_human" = wants a person/agent/supervisor (NOT "I am the representative").
-- off_topic: true only if the message asks for something outside insurance customer service. In scope:
+- off_topic: true only if the message asks for something outside insurance claims support. In scope:
   {'; '.join(IN_SCOPE_TOPICS)}. Giving identity info, yes/no answers, venting about the claim, and
-  questions about why verification is needed are all IN scope. General knowledge (e.g. "what is RL?",
-  coding, weather, trivia) is off topic. If a message mixes both, off_topic=true and still extract the rest.
+  questions about why verification is needed are all IN scope. Insurance claim concepts such as "what is
+  a claim?", "what is a dental claim?", denial, appeal, documents, status, reimbursement, or payment are
+  in scope. Standalone general knowledge, anatomy, medical/dental education, coding, weather, or trivia
+  questions are off topic. If a message mixes both, off_topic=true and still extract the rest.
 - question: the caller's actual question restated plainly, or null."""
 
 
@@ -62,20 +65,21 @@ Non-negotiable:
 3. Honor every item in MUST_NOT.
 4. Never repeat back sensitive identifiers (SSN digits, full date of birth, full phone number).
 5. Never mention internal terms (directive, workflow engine, phase, SOP, harness, JSON, tool).
-6. Answer only insurance-customer-service matters; for anything else, the directive tells you how to decline.
+6. Answer only insurance claims support matters; for anything else, the directive tells you how to redirect.
+7. Before identity is verified, never address the caller by any name they provided.
 
 Style: 2-5 sentences for most turns. Use a short bulleted list only for multiple documents or options.
-Plain text, no headings, no bold. Mirror the caller's register; don't over-apologize; acknowledge feelings
-in one genuine sentence, then move forward. End with one clear question or next step when the directive
-asks for input."""
+Plain text, no headings, no bold. Mirror the caller's register. Default to calm, direct, polite support
+language. Do not add emotional validation unless the DIRECTIVE explicitly asks for it. End with one clear
+question or next step when the directive asks for input. Do not use em dashes."""
 
 
 def speaker_user(session: Session, directive: Any, facts: dict[str, Any]) -> str:
     spec = SOP.get(session.phase)
-    recent = session.transcript[-8:]
+    recent = _speaker_transcript(session)
     convo = "\n".join(f"{'CALLER' if m['role'] == 'user' else 'SAM'}: {m['text']}" for m in recent)
     mem = {k: v["value"] for k, v in session.memory.snapshot().items()
-           if not k.startswith("_") and k not in ("dob", "id_last4", "phone", "email")}
+           if not k.startswith("_") and k not in ("full_name", "dob", "id_last4", "phone", "email")}
     blocks = [
         f"<step>{session.phase.value}{' (' + spec.autonomy.value + ')' if spec else ''}</step>",
         "<step_rules>\n" + ("\n".join(f"- {r}" for r in spec.rules) if spec else "- The call is being wrapped up.") + "\n</step_rules>",
@@ -90,6 +94,19 @@ def speaker_user(session: Session, directive: Any, facts: dict[str, Any]) -> str
     blocks.append(f"<conversation_so_far>\n{convo}\n</conversation_so_far>")
     blocks.append("Write Sam's next message to the caller. Output only the message text.")
     return "\n\n".join(blocks)
+
+
+def _speaker_transcript(session: Session) -> list[dict[str, str]]:
+    recent = session.transcript[-8:]
+    if session.verification.verified:
+        return recent
+    sanitized: list[dict[str, str]] = []
+    for message in recent:
+        if message["role"] == "user":
+            sanitized.append({"role": "user", "text": "[caller provided identity information or asked a verification-related question]"})
+        else:
+            sanitized.append(message)
+    return sanitized
 
 
 EMAIL_SYSTEM = """You write the short recap paragraph of a customer-service follow-up email for an insurance

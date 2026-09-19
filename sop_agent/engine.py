@@ -5,6 +5,7 @@ deterministic code owns phase transitions, verification, data access, and consen
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -27,6 +28,33 @@ from .state import IDENTITY_FIELDS, Phase, Session
 from .tools import list_claims, rank_cases, send_email_summary
 from .verification import verify_identity
 
+CLAIM_SUPPORT_RE = re.compile(
+    r"\b(claim|claims|insurance|policy|coverage|covered|denial|denied|appeal|appeals|document|documents|"
+    r"upload|submit|submission|reimbursement|reimburse|payment|paid|pay|status|deductible|deadline|"
+    r"portal|provider|bill|billing|healthcare claim|dental claim|auto claim|case)\b",
+    re.I,
+)
+GENERAL_CLAIM_DEFINITION_RE = re.compile(
+    r"\bwhat (is|does) (a |an )?(claim|dental claim|healthcare claim|auto claim|denial|appeal|reimbursement|deductible)\b",
+    re.I,
+)
+CLAIM_LIST_REQUEST_RE = re.compile(
+    r"\b(list|show|see)\b.*\b(claim|claims|case|cases)\b|"
+    r"\b(all|other|another|any other)\b.*\b(claim|claims|case|cases)\b|"
+    r"\bdo i have\b.*\b(claim|claims|case|cases)\b|"
+    r"\bwhat (claims|cases) (do i have|are on file)\b|"
+    r"\bwhat (other|all) (claims|cases)\b|"
+    r"\bwhich (claims|cases) (do i have|are on file)\b|"
+    r"\b(claims|cases) (again|on file)\b|"
+    r"\b(list them|show them|those claims|the options|you listed|you showed)\b",
+    re.I,
+)
+CASE_SWITCH_RE = re.compile(
+    r"\b(switch|change|move|talk|discuss|look|check)\b.*\b(claim|case|one)\b|"
+    r"\b(other|another|different|second|third|first|last|auto|dental|healthcare|closed|open)\b.*\b(claim|case|one)\b|"
+    r"\b(the )?(auto|dental|healthcare|closed|open|denied) one\b",
+    re.I,
+)
 
 class ModelClient(Protocol):
     def structured(self, system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
@@ -101,7 +129,7 @@ class SOPAgent:
         elif session.phase == Phase.RESOLVE_INTENT:
             reply = self._handle_resolve_intent(session, perception)
         elif session.phase == Phase.PROCESS_CASE:
-            reply = self._handle_process_case(session, perception)
+            reply = self._handle_process_case(session, perception, text)
         elif session.phase == Phase.POST_PROCESS:
             reply = self._handle_post_process(session, perception)
         else:
@@ -189,10 +217,9 @@ class SOPAgent:
         if enough_to_fail:
             session.verification.attempts += 1
 
-        if session.verification.attempts >= self.settings.max_persuasion_attempts:
-            return self._escalate(session, "verification_failed_repeatedly")
-
         directive = Directive("continue_verification", awaiting="identity")
+        directive.must_not.append("Do not address the caller by any name they provided until identity is verified.")
+        directive.must_not.append("Do not ask again for identity fields the caller already provided unless all required fields were provided and verification failed.")
         self._add_empathy(directive, p)
         if p.has("request_protected_info"):
             directive.add(
@@ -202,20 +229,23 @@ class SOPAgent:
         if enough_to_fail:
             directive.add(
                 "Say identity could not be verified yet without naming which fields failed.",
-                "I could not verify the account with what I have so far.",
+                "I was not able to verify the identity with that information.",
             )
         else:
+            missing = self._missing_identity_fields(session)
+            missing_text = self._identity_fields_text(missing)
             directive.add(
-                "Say you have some information if applicable, but still need enough identity fields to continue.",
-                "I still need to verify your identity before discussing claim details.",
+                "Say you still need the missing required identity fields before discussing claim details.",
+                f"I still need {missing_text} before I can discuss claim details.",
+            )
+        if self._should_explain_verification(p):
+            directive.add(
+                "Briefly explain why identity verification is required.",
+                "Verification helps make sure claim details are only shared with the right person.",
             )
         directive.add(
-            "Explain that verification protects private claim, health, financial, and policy information.",
-            "That step protects private claim, health, financial, and policy information.",
-        )
-        directive.add(
-            "Ask for any acceptable combination of identity fields, without repeating sensitive values back.",
-            "You can use any three of these: full name, date of birth, phone number on file, email on file, or the last four digits of your SSN or national ID.",
+            "Ask for the required identity fields without repeating sensitive values back.",
+            self._identity_request_template(session),
         )
         return self._speak(session, directive, {})
 
@@ -241,6 +271,7 @@ class SOPAgent:
         if ranking.selected and intent in INTENTS:
             session.active_case_id = ranking.selected
             session.resolved_intent = intent
+            session.last_claim_candidates = ranking.candidates
             for key in ("intent", "case_type", "case_status", "case_month", "case_year", "case_id_hint"):
                 session.memory.consume(key)
             session.transition(Phase.PROCESS_CASE, "case and intent resolved")
@@ -258,6 +289,8 @@ class SOPAgent:
 
         if ranking.reason != "no_hints" and ranking.candidates:
             session.awaiting = "case"
+            session.last_claim_candidates = ranking.candidates
+            session.last_claim_list_shown = True
             labels = "; ".join(case_label(c) for c in ranking.candidates[:4])
             directive = Directive("disambiguate_case", awaiting="case")
             directive.add(
@@ -270,6 +303,8 @@ class SOPAgent:
     def _ask_for_intent_or_case(self, session: Session, p: Perception) -> str:
         facts = build_facts(session, self.fixtures, self.settings.as_of_date)
         claims = facts.get("claims_on_file", [])
+        session.last_claim_candidates = claims
+        session.last_claim_list_shown = True
         labels = "; ".join(case_label(c) for c in claims[:4])
         directive = Directive("need_case_and_intent", awaiting="intent")
         self._add_empathy(directive, p)
@@ -279,10 +314,18 @@ class SOPAgent:
         )
         return self._speak(session, directive, facts)
 
-    def _handle_process_case(self, session: Session, p: Perception) -> str:
+    def _handle_process_case(self, session: Session, p: Perception, text: str) -> str:
         if p.has("done"):
             session.transition(Phase.POST_PROCESS, "caller finished case questions")
             return self._offer_email_summary(session, p)
+        case_navigation = self._handle_case_navigation(session, p, text)
+        if case_navigation:
+            return case_navigation
+        general_answer = self._general_claim_support_answer(text)
+        if general_answer:
+            return self._answer_general_claim_question(session, general_answer)
+        if p.has("ask_question") and not self._is_claim_support_question(text):
+            return self._redirect_to_claim_scope(session)
         if p.intent in INTENTS:
             session.resolved_intent = p.intent
         return self._answer_current_case(session, p.question)
@@ -346,7 +389,7 @@ class SOPAgent:
 
     # ------------------------------------------------------------------ helpers
     def _speak(self, session: Session, directive: Directive, facts: dict[str, Any]) -> str:
-        if self.use_template_speaker:
+        if self.use_template_speaker or session.phase == Phase.VERIFY_ID:
             text = directive.template()
         else:
             try:
@@ -389,12 +432,13 @@ class SOPAgent:
         return any(p.identity.values()) or p.intent in INTENTS or any(p.case_hints.values()) or p.has("done")
 
     def _handle_offtopic(self, session: Session, p: Perception) -> str:
-        if session.counters.offtopic_streak >= self.settings.max_offtopic_strikes:
-            return self._escalate(session, "repeated_off_topic")
+        return self._redirect_to_claim_scope(session)
+
+    def _redirect_to_claim_scope(self, session: Session) -> str:
         directive = Directive("off_topic_redirect", awaiting=session.awaiting)
         directive.add(
-            "Politely decline the out-of-scope question and redirect to insurance claim support.",
-            "I can only help with insurance claim and account-support questions here, so I cannot answer that. I can keep helping with your claim or connect you with a human representative.",
+            "State what the agent can help with and redirect to insurance claims.",
+            "I'm only able to help with insurance claims. If you have a question about a claim, I'm happy to help with that. Do you have a claim you'd like to discuss?",
         )
         return self._speak(session, directive, build_facts(session, self.fixtures, self.settings.as_of_date))
 
@@ -404,10 +448,10 @@ class SOPAgent:
         return "I understand. A human representative should take it from here, so I will hand this conversation over for review."
 
     def _add_empathy(self, directive: Directive, p: Perception) -> None:
-        if p.emotion in ("frustrated", "angry"):
+        if p.emotion in ("frustrated", "angry") and p.emotion_intensity >= 2:
             directive.empathy = "caller sounds frustrated"
             directive.beats.append(Beat("Acknowledge frustration before continuing.", "I understand why this feels frustrating."))
-        elif p.emotion == "anxious":
+        elif p.emotion == "anxious" and p.emotion_intensity >= 2:
             directive.empathy = "caller sounds anxious"
             directive.beats.append(Beat("Reassure the caller before continuing.", "I know this can feel stressful, and I will walk through it step by step."))
         elif p.emotion == "confused" or p.has("clarification_request"):
@@ -416,11 +460,137 @@ class SOPAgent:
 
     def _initial_message(self, session: Session) -> str:
         directive = Directive("start_verification", awaiting="identity")
+        directive.must_not.append("Do not address the caller by any name they provided until identity is verified.")
         directive.add(
             "Greet the caller, explain identity verification, and ask for acceptable identity fields.",
-            "Hi, I am Sam. Before we discuss claim details, I need to verify your identity because claim records can include private health, financial, and policy information. Please provide any three of these: full name, date of birth, phone number on file, email on file, or the last four digits of your SSN or national ID.",
+            "Hi, I am Sam. Before we discuss claim details, I need to verify your identity. Please provide your full name, date of birth, and the last four digits of your SSN.",
         )
         return self._speak(session, directive, {})
+
+    def _should_explain_verification(self, p: Perception) -> bool:
+        return p.has("refuse_info") or p.has("request_protected_info") or p.has("clarification_request") or p.negative
+
+    def _missing_identity_fields(self, session: Session) -> list[str]:
+        return [field for field in IDENTITY_FIELDS if not session.memory.get(field)]
+
+    def _identity_fields_text(self, fields: list[str]) -> str:
+        labels = {
+            "full_name": "your full name",
+            "dob": "your date of birth",
+            "id_last4": "the last four digits of your SSN",
+        }
+        items = [labels[field] for field in fields] or ["your full name, date of birth, and the last four digits of your SSN"]
+        if len(items) == 1:
+            return items[0]
+        return ", ".join(items[:-1]) + f" and {items[-1]}"
+
+    def _identity_request_template(self, session: Session) -> str:
+        missing = self._missing_identity_fields(session)
+        if missing and len(missing) < len(IDENTITY_FIELDS):
+            return f"Please provide {self._identity_fields_text(missing)}."
+        return "Please provide your full name, date of birth, and the last four digits of your SSN."
+
+    def _handle_case_navigation(self, session: Session, p: Perception, text: str) -> str | None:
+        if self._is_claim_list_request(text):
+            return self._list_verified_claims(session)
+        if not self._wants_case_switch(p, text):
+            return None
+
+        index = list_claims(session, self.fixtures)
+        ranking = rank_cases(index, self._perception_hints(p))
+        session.last_trace["case_switch_ranking"] = {
+            "selected": ranking.selected,
+            "candidate_ids": [c["case_id"] for c in ranking.candidates],
+            "reason": ranking.reason,
+            "hints": self._perception_hints(p),
+        }
+
+        if ranking.selected:
+            session.active_case_id = ranking.selected
+            session.last_claim_candidates = ranking.candidates
+            if p.intent in INTENTS:
+                session.resolved_intent = p.intent
+            return self._answer_current_case(session, p.question)
+
+        candidates = ranking.candidates or index
+        session.last_claim_candidates = candidates
+        session.last_claim_list_shown = True
+        labels = "; ".join(case_label(c) for c in candidates[:4])
+        directive = Directive("disambiguate_case_switch", awaiting="case")
+        directive.add(
+            "Ask which verified claim the caller wants to discuss.",
+            f"I found these claims: {labels}. Which one would you like to discuss?",
+        )
+        return self._speak(session, directive, build_facts(session, self.fixtures, self.settings.as_of_date))
+
+    def _list_verified_claims(self, session: Session) -> str:
+        claims = list_claims(session, self.fixtures)
+        session.last_claim_candidates = claims
+        session.last_claim_list_shown = True
+        labels = "; ".join(case_label(c) for c in claims[:4])
+        directive = Directive("list_verified_claims", awaiting="case")
+        directive.add(
+            "List the verified caller's claim options and ask which one to discuss.",
+            f"Here are the claims I can help with: {labels}. Which one would you like to discuss?",
+        )
+        return self._speak(session, directive, build_facts(session, self.fixtures, self.settings.as_of_date))
+
+    def _is_claim_list_request(self, text: str) -> bool:
+        return bool(CLAIM_LIST_REQUEST_RE.search(text))
+
+    def _wants_case_switch(self, p: Perception, text: str) -> bool:
+        hints = p.case_hints or {}
+        has_case_reference = bool(re.search(r"\b(claim|case|one)\b", text, re.I))
+        if hints.get("case_id") or hints.get("month") or hints.get("year"):
+            return True
+        if hints.get("case_type") and has_case_reference:
+            return True
+        if hints.get("status") and re.search(r"\b(one|claim|case)\b", text, re.I):
+            return True
+        return bool(CASE_SWITCH_RE.search(text))
+
+    def _perception_hints(self, p: Perception) -> dict[str, Any]:
+        hints = p.case_hints or {}
+        return {
+            "case_id": hints.get("case_id"),
+            "case_type": hints.get("case_type"),
+            "status": hints.get("status"),
+            "month": hints.get("month"),
+            "year": hints.get("year"),
+        }
+
+    def _is_claim_support_question(self, text: str) -> bool:
+        return bool(CLAIM_SUPPORT_RE.search(text) or GENERAL_CLAIM_DEFINITION_RE.search(text))
+
+    def _general_claim_support_answer(self, text: str) -> str | None:
+        low = text.lower()
+        if re.search(r"\bwhat (is|does) (a |an )?claim\b", low):
+            return "A claim is a request for the insurance company to review a covered event, service, or expense and decide what can be paid or reimbursed under the policy."
+        if re.search(r"\bwhat (is|does) (a |an )?dental claim\b", low):
+            return "A dental claim is a request for insurance review of dental care, such as a visit, procedure, or related expense."
+        if re.search(r"\bwhat (is|does) (a |an )?healthcare claim\b", low):
+            return "A healthcare claim is a request for insurance review of medical care, services, or related expenses."
+        if re.search(r"\bwhat (is|does) (a |an )?auto claim\b", low):
+            return "An auto claim is a request for insurance review of vehicle damage, an accident, or a related covered expense."
+        if re.search(r"\bwhat (is|does) (a |an )?denial\b|\bwhat does denied mean\b", low):
+            return "A denial means the claim was reviewed and was not approved for payment based on the information on file."
+        if re.search(r"\bwhat (is|does) (a |an )?appeal\b", low):
+            return "An appeal is a request to have a denied claim reviewed again, usually with additional information or documents."
+        if re.search(r"\bwhat (is|does) (a |an )?reimbursement\b", low):
+            return "A reimbursement is money the insurer pays back for an eligible covered expense."
+        return None
+
+    def _answer_general_claim_question(self, session: Session, answer: str) -> str:
+        directive = Directive("answer_general_claim_question", awaiting="case_question")
+        directive.add(
+            "Answer the insurance claims support question briefly.",
+            answer,
+        )
+        directive.add(
+            "Invite one next claim-related question.",
+            "What else would you like to know about your claim?",
+        )
+        return self._speak(session, directive, build_facts(session, self.fixtures, self.settings.as_of_date))
 
     def _finalize(self, session: Session, reply: str, perception: Perception | None = None) -> TurnResult:
         session.transcript.append({"role": "assistant", "text": reply})

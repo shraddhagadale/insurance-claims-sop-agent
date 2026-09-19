@@ -17,7 +17,7 @@ FIELD_LABELS = {
     "dob": "your date of birth",
     "phone": "the phone number on file",
     "email": "the email address on file",
-    "id_last4": "the last 4 digits of your SSN (or national ID)",
+    "id_last4": "the last 4 digits of your SSN",
 }
 
 
@@ -197,6 +197,8 @@ def guard(session: Session, fx: Fixtures, text: str, facts: dict[str, Any]) -> l
     v: list[str] = []
     if _INTERNAL.search(text):
         v.append("mentions internal machinery")
+    if "—" in text:
+        v.append("uses em dash")
     l4 = session.memory.get("id_last4")
     if l4 and re.search(rf"\b{re.escape(str(l4)[-4:])}\b", text):
         v.append("echoed SSN digits")

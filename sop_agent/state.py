@@ -69,7 +69,7 @@ class Memory:
 
 
 # Identity fields that count toward the verification threshold (per the SOP).
-IDENTITY_FIELDS = ("full_name", "dob", "phone", "email", "id_last4")
+IDENTITY_FIELDS = ("full_name", "dob", "id_last4")
 
 
 @dataclass
@@ -107,6 +107,8 @@ class Session:
     transcript: list[dict[str, str]] = field(default_factory=list)
     active_case_id: str | None = None
     resolved_intent: str | None = None
+    last_claim_candidates: list[dict[str, Any]] = field(default_factory=list)
+    last_claim_list_shown: bool = False
     discussed_topics: list[str] = field(default_factory=list)
     follow_ups: list[str] = field(default_factory=list)
     email_status: str = "not_offered"  # not_offered | offered | sent | declined

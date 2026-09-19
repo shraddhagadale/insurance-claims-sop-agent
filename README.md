@@ -66,7 +66,7 @@ Render setup:
 
 ```bash
 ANTHROPIC_API_KEY=...
-SOP_MODEL=claude-opus-5
+SOP_MODEL=claude-sonnet-5
 SOP_AS_OF_DATE=2026-03-05
 ```
 

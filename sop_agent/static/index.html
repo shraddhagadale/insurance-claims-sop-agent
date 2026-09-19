@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Insurance Claims SOP Agent</title>
+  <title>Insurance Claims Support</title>
   <style>
     :root {
       --bg: #f6f7f9;
       --panel: #ffffff;
       --ink: #1c2430;
-      --muted: #647184;
+      --muted: #667085;
       --line: #d8dee8;
       --accent: #0f766e;
       --accent-ink: #ffffff;
@@ -26,45 +26,21 @@
       background: var(--bg);
     }
     .shell {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 340px;
       min-height: 100vh;
-    }
-    main {
       display: flex;
       flex-direction: column;
-      min-width: 0;
-      border-right: 1px solid var(--line);
     }
     header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
       padding: 18px 22px;
       background: var(--panel);
       border-bottom: 1px solid var(--line);
     }
     h1 {
-      margin: 0;
+      max-width: 880px;
+      margin: 0 auto;
       font-size: 18px;
       font-weight: 700;
       letter-spacing: 0;
-    }
-    .meta {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
-    .pill {
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 6px 10px;
-      font-size: 12px;
-      color: var(--muted);
-      background: #fbfcfe;
-      white-space: nowrap;
     }
     .chat {
       flex: 1;
@@ -89,8 +65,39 @@
       word-break: break-word;
       box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04);
     }
-    .message.agent { background: var(--agent); align-self: flex-start; }
-    .message.user { background: var(--user); align-self: flex-end; }
+    .message.agent {
+      background: var(--agent);
+      align-self: flex-start;
+    }
+    .message.user {
+      background: var(--user);
+      align-self: flex-end;
+    }
+    .message.typing {
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .dots {
+      display: inline-flex;
+      gap: 4px;
+      align-items: center;
+    }
+    .dots span {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--muted);
+      opacity: 0.35;
+      animation: pulse 1.2s infinite ease-in-out;
+    }
+    .dots span:nth-child(2) { animation-delay: 0.15s; }
+    .dots span:nth-child(3) { animation-delay: 0.3s; }
+    @keyframes pulse {
+      0%, 80%, 100% { transform: translateY(0); opacity: 0.35; }
+      40% { transform: translateY(-3px); opacity: 0.9; }
+    }
     .composer {
       padding: 16px 22px 20px;
       background: var(--panel);
@@ -128,108 +135,41 @@
       background: var(--accent);
       cursor: pointer;
     }
-    button:disabled { opacity: 0.55; cursor: wait; }
-    aside {
-      padding: 18px;
-      background: #fbfcfe;
-      overflow: auto;
+    button:disabled {
+      opacity: 0.55;
+      cursor: wait;
     }
-    .side-section {
-      padding: 14px 0;
-      border-bottom: 1px solid var(--line);
-    }
-    .side-section:first-child { padding-top: 0; }
-    h2 {
-      margin: 0 0 10px;
-      font-size: 13px;
-      text-transform: uppercase;
-      letter-spacing: 0;
-      color: var(--muted);
-    }
-    .sample {
-      width: 100%;
-      min-height: 0;
-      text-align: left;
-      color: var(--ink);
-      background: #eef7f5;
-      border: 1px solid #b7d8d3;
-      font-weight: 600;
-      padding: 10px 12px;
-    }
-    dl {
-      display: grid;
-      grid-template-columns: 120px minmax(0, 1fr);
-      gap: 8px;
-      margin: 0;
+    .error {
+      max-width: 880px;
+      margin: 8px auto 0;
+      color: var(--danger);
       font-size: 13px;
     }
-    dt { color: var(--muted); }
-    dd { margin: 0; word-break: break-word; }
-    pre {
-      margin: 0;
-      max-height: 420px;
-      overflow: auto;
-      padding: 12px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #101827;
-      color: #e5eefb;
-      font-size: 12px;
-      line-height: 1.4;
-      white-space: pre-wrap;
-    }
-    .error { color: var(--danger); font-size: 13px; margin-top: 8px; }
-    @media (max-width: 880px) {
-      .shell { grid-template-columns: 1fr; }
-      aside { border-top: 1px solid var(--line); }
-      main { min-height: 72vh; border-right: 0; }
-      header { align-items: flex-start; flex-direction: column; }
-      .meta { justify-content: flex-start; }
+    @media (max-width: 680px) {
+      header { padding: 16px; }
+      .chat { padding: 18px 14px; }
+      .composer { padding: 14px; }
       form { grid-template-columns: 1fr; }
       button { width: 100%; }
+      .message { max-width: 94%; }
     }
   </style>
 </head>
 <body>
   <div class="shell">
-    <main>
-      <header>
-        <h1>Insurance Claims SOP Agent</h1>
-        <div class="meta">
-          <span class="pill" id="phase">Phase: loading</span>
-          <span class="pill" id="case">Case: none</span>
-          <span class="pill" id="email">Email: not offered</span>
-        </div>
-      </header>
-      <section class="chat" id="chat">
-        <div class="messages" id="messages"></div>
-      </section>
-      <section class="composer">
-        <form id="form">
-          <textarea id="input" placeholder="Type as the caller..." autocomplete="off"></textarea>
-          <button id="send" type="submit">Send</button>
-        </form>
-        <div class="error" id="error" role="alert"></div>
-      </section>
-    </main>
-    <aside>
-      <section class="side-section">
-        <h2>Sample Test</h2>
-        <button class="sample" id="sample" type="button">Use Margaret Chen test message</button>
-      </section>
-      <section class="side-section">
-        <h2>State</h2>
-        <dl>
-          <dt>Session</dt><dd id="session">starting</dd>
-          <dt>Verified</dt><dd id="verified">false</dd>
-          <dt>Intent</dt><dd id="intent">none</dd>
-        </dl>
-      </section>
-      <section class="side-section">
-        <h2>Trace</h2>
-        <pre id="trace">{}</pre>
-      </section>
-    </aside>
+    <header>
+      <h1>Insurance Claims Support</h1>
+    </header>
+    <section class="chat" id="chat">
+      <div class="messages" id="messages"></div>
+    </section>
+    <section class="composer">
+      <form id="form">
+        <textarea id="input" placeholder="Type your message..." autocomplete="off"></textarea>
+        <button id="send" type="submit">Send</button>
+      </form>
+      <div class="error" id="error" role="alert"></div>
+    </section>
   </div>
   <script>
     const els = {
@@ -238,40 +178,45 @@
       form: document.getElementById("form"),
       input: document.getElementById("input"),
       send: document.getElementById("send"),
-      error: document.getElementById("error"),
-      phase: document.getElementById("phase"),
-      case: document.getElementById("case"),
-      email: document.getElementById("email"),
-      session: document.getElementById("session"),
-      verified: document.getElementById("verified"),
-      intent: document.getElementById("intent"),
-      trace: document.getElementById("trace"),
-      sample: document.getElementById("sample")
+      error: document.getElementById("error")
     };
     let sessionId = null;
+    let typingNode = null;
+
+    function scrollToBottom() {
+      els.chat.scrollTop = els.chat.scrollHeight;
+    }
 
     function addMessage(role, text) {
       const node = document.createElement("div");
       node.className = `message ${role}`;
       node.textContent = text;
       els.messages.appendChild(node);
-      els.chat.scrollTop = els.chat.scrollHeight;
+      scrollToBottom();
+      return node;
+    }
+
+    function showTyping() {
+      hideTyping();
+      typingNode = document.createElement("div");
+      typingNode.className = "message agent typing";
+      typingNode.innerHTML = 'Sam is typing <span class="dots" aria-hidden="true"><span></span><span></span><span></span></span>';
+      els.messages.appendChild(typingNode);
+      scrollToBottom();
+    }
+
+    function hideTyping() {
+      if (typingNode) {
+        typingNode.remove();
+        typingNode = null;
+      }
     }
 
     function setBusy(busy) {
       els.send.disabled = busy;
       els.input.disabled = busy;
-    }
-
-    function updateState(data) {
-      sessionId = data.session_id;
-      els.phase.textContent = `Phase: ${data.phase}`;
-      els.case.textContent = `Case: ${data.active_case_id || "none"}`;
-      els.email.textContent = `Email: ${data.email_status}`;
-      els.session.textContent = data.session_id;
-      els.verified.textContent = String(data.verified);
-      els.intent.textContent = data.resolved_intent || "none";
-      els.trace.textContent = JSON.stringify(data.trace || {}, null, 2);
+      if (busy) showTyping();
+      else hideTyping();
     }
 
     async function request(url, options) {
@@ -287,7 +232,8 @@
       setBusy(true);
       try {
         const data = await request("/sessions", { method: "POST" });
-        updateState(data);
+        sessionId = data.session_id;
+        hideTyping();
         addMessage("agent", data.reply);
       } catch (err) {
         els.error.textContent = err.message;
@@ -309,7 +255,8 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message: text.trim() })
         });
-        updateState(data);
+        sessionId = data.session_id;
+        hideTyping();
         addMessage("agent", data.reply);
       } catch (err) {
         els.error.textContent = err.message;
@@ -323,9 +270,11 @@
       event.preventDefault();
       sendMessage(els.input.value);
     });
-    els.sample.addEventListener("click", () => {
-      els.input.value = "I’m the policyholder. My name is Margaret Chen, policy POL-9921. I’m calling about my denied healthcare claim from January. DOB is 1985-03-15, SSN last four is 4472.";
-      els.input.focus();
+    els.input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        sendMessage(els.input.value);
+      }
     });
     start();
   </script>

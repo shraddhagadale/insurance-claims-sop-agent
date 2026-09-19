@@ -38,7 +38,7 @@ PERCEPTION_SCHEMA: dict[str, Any] = {
                 "dob": _nullable({"type": "string", "description": "ISO YYYY-MM-DD"}),
                 "phone": _nullable({"type": "string"}),
                 "email": _nullable({"type": "string"}),
-                "id_last4": _nullable({"type": "string"}),
+                "id_last4": _nullable({"type": "string", "description": "last 4 digits of SSN"}),
                 "policy_number": _nullable({"type": "string"}),
             },
             "required": ["full_name", "dob", "phone", "email", "id_last4", "policy_number"],
@@ -116,10 +116,10 @@ _WORD_NUM = {"zero": "0", "oh": "0", "one": "1", "two": "2", "three": "3", "four
              "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9"}
 _IN_SCOPE = re.compile(
     r"claim|insur|policy|polic|denied|deni|appeal|status|document|upload|submit|portal|pay|"
-    r"reimburs|amount|refund|deductible|coverage|covered|dental|health|medical|auto|car|accident|"
+    r"reimburs|amount|refund|deductible|coverage|covered|auto claim|car claim|accident claim|"
     r"pathology|office note|report|deadline|verify|verification|ssn|social|birth|dob|email|phone|"
-    r"representative|human|agent|person|supervisor|summary|help|account|money|fee|bill|doctor|"
-    r"hospital|lab|provider|fax|mail|process|review|how long|when|next step|what now|case|file",
+    r"representative|human|agent|person|supervisor|summary|help|account|money|fee|bill|"
+    r"provider|fax|mail|process|review|how long|when|next step|what now|case|file",
     re.I,
 )
 _QUESTIONISH = re.compile(r"\?|^(what|who|why|how|when|where|can you|could you|tell me|explain|is it)\b", re.I)
@@ -178,7 +178,7 @@ class RulePerceiver:
         pol = re.search(r"\bPOL[\s\-]?\d{3,}\b", t, re.I)
         if pol:
             ident["policy_number"] = pol.group(0).upper().replace(" ", "-")
-        l4 = re.search(r"(?:ssn|social|national id|id number|last (?:four|4)(?: digits)?)[^0-9]{0,30}(\d{4})\b", t, re.I)
+        l4 = re.search(r"(?:ssn|social|last (?:four|4)(?: digits)?)[^0-9]{0,30}(\d{4})\b", t, re.I)
         if l4:
             ident["id_last4"] = l4.group(1)
         elif ctx.get("awaiting") == "identity" and re.fullmatch(r"\D{0,20}(\d{4})\D{0,5}", t):

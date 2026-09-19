@@ -57,16 +57,16 @@ SOP: dict[Phase, PhaseSpec] = {
         autonomy=Autonomy.STRICT,
         data_scope=DataScope.NONE,
         tools=("verify_identity",),
-        goal="Verify the caller's identity against at least 3 PII fields before anything else.",
-        exit_gate="verify_identity() reports >= 3 matching fields on one policy record",
+        goal="Verify the caller's identity against full name, date of birth, and last 4 of SSN before anything else.",
+        exit_gate="verify_identity() reports full name, date of birth, and last 4 of SSN match one policy record",
         rules=(
             "Do not reveal, confirm, or hint at any claim or account detail - including whether a claim, "
             "policy, or person exists in our records.",
             "Never say which specific field failed to match; say only that you could not verify yet.",
             "Never repeat back the caller's SSN digits, full DOB, or other PII.",
-            "Accepted fields: full name, date of birth, phone on file, email on file, last 4 of SSN/national ID. "
-            "A policy number helps locate the record but does not count toward the 3.",
-            "Caller may use any combination; if they decline one field, offer the others.",
+            "Required verification fields: full name, date of birth, and last 4 of SSN. "
+            "A policy number helps locate the record but does not count toward verification.",
+            "If the caller provides only partial identity information, ask for only the missing required fields.",
             "Acknowledge (do not act on) anything they mention about their claim - say you will get to it right "
             "after verification.",
         ),
